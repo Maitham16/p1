@@ -4,7 +4,6 @@ import os
 import socket
 import threading
 from kafka import KafkaConsumer
-import pandas as pd
 import tensorflow as tf
 import tempfile
 import struct
@@ -28,18 +27,21 @@ NUM_NODES = 4
 EXPECTED_COLUMNS = 18
 filename = "central_server_data.csv"
 
+########### Callbacks class for neural network training ###########
 class LoggingCallback(Callback):
+    """Callback class for logging the training progress of the neural network."""
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         logger.info(f"End of Epoch {epoch + 1}. Loss: {logs.get('loss')}, Accuracy: {logs.get('accuracy')}")
 
+################### CSV Related Functions ###################
 def write_data_to_csv(writer, data, columns):
+    """Write data to CSV using the provided writer."""
     try:
         writer.writerow([data[col] for col in columns])
     except Exception as e:
         print(f"Failed to write data to CSV: {e}")
 
-# Utility Functions
 def save_data_to_csv(data):
     """Save provided data to CSV."""
     columns = [
@@ -55,7 +57,7 @@ def save_data_to_csv(data):
         with open('central_server_data.csv', 'a', newline='') as file:
             writer = csv.writer(file)
             if not file_exists:
-                writer.writerow(columns)  # Write headers if file doesn't exist
+                writer.writerow(columns)
             write_data_to_csv(writer, data, columns)
     except Exception as e:
         print(f"Failed to write to CSV: {e}")
@@ -63,6 +65,21 @@ def save_data_to_csv(data):
     
     print(f"Saved data to CSV: {data}")
 
+def load_csv_data(filename, num_features=8):
+    """Load data from CSV and return features and labels."""
+    data = np.genfromtxt(filename, delimiter=',', skip_header=1)
+
+    # Check if data is one-dimensional
+    if len(data.shape) == 1:
+        # Reshape to 2D array
+        data = data.reshape(1, -1)
+
+    X = data[:, :num_features]
+    y = data[:, num_features]
+
+    return X, y
+
+################### Socket Related Functions ###################
 def send_large_data(sock, data):
     """Send large data over a socket."""
     data_size = len(data)
@@ -83,7 +100,7 @@ def receive_large_data(sock):
 def send_global_model_to_node(client_socket, client_address):
     """Send the global model to a node."""
     with tempfile.NamedTemporaryFile(delete=True) as tmp:
-        with global_model_lock:  # Locking while accessing global_model
+        with global_model_lock:
             global_model.save(tmp.name, save_format="h5")
             serialized_model = tmp.read()
 
@@ -94,6 +111,7 @@ def send_global_model_to_node(client_socket, client_address):
             print("Client disconnected before data could be sent.")
         client_socket.close()
 
+################### Data Processing Functions ###################
 def process_data(row):
     """Process data and return feature set and label."""
     # Mapping indices to the columns from the CSV
@@ -124,25 +142,12 @@ def process_data(row):
     label = data['needs_charge']
     return features, label
 
-def load_csv_data(filename, num_features=8):
-    """Load data from CSV and return features and labels."""
-    data = np.genfromtxt(filename, delimiter=',', skip_header=1)
-
-    # Check if data is one-dimensional
-    if len(data.shape) == 1:
-        data = data.reshape(1, -1)  # Reshape to 2D
-
-    X = data[:, :num_features]
-    y = data[:, num_features]
-
-    return X, y
-
-# Model Related Functions
+################### Model Related Functions ###################
 def create_blank_model(input_features=8):
     """Create and return a blank model."""
     model = tf.keras.models.Sequential([
-        layers.Dense(12, activation='relu', kernel_regularizer=regularizers.l2(0.01), input_shape=(input_features,)),  # L2 regularization
-        layers.Dense(8, activation='relu', kernel_regularizer=regularizers.l2(0.01)),  # L2 regularization
+        layers.Dense(12, activation='relu', kernel_regularizer=regularizers.l2(0.01), input_shape=(input_features,)),
+        layers.Dense(8, activation='relu', kernel_regularizer=regularizers.l2(0.01)),
         layers.Dense(1, activation='sigmoid')
     ])
     return model
@@ -159,18 +164,15 @@ def train_global_model():
     """Train the global model."""
     print("train_global_model function is called!") 
 
-    # Load raw data
     raw_data = np.genfromtxt("central_server_data.csv", delimiter=',', skip_header=1)
 
-    # Process data
     processed_data = [process_data(row) for row in raw_data]
     X = np.array([item[0] for item in processed_data])
     y = np.array([item[1] for item in processed_data])
 
     with global_model_lock:
         global_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        
-        # Log the start of training
+
         logger.info("Starting training of the global model...")
         
         global_model.fit(X, y, epochs=100, batch_size=32, verbose=1,
@@ -181,7 +183,6 @@ def train_global_model():
         logger.info("Test loss: %s", score[0])
         logger.info("Test accuracy: %s", score[1])
 
-        # Log the completion of training
         logger.info("Training of the global model completed.")
 
 def aggregate_models_federated_averaging(models, accuracies):
@@ -201,7 +202,7 @@ def aggregate_models_federated_averaging(models, accuracies):
         global_model.set_weights(averaged_weights)
     global_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
-# Kafka and Networking Functions
+################### Server Related Functions ###################
 def handle_client_connection(client_socket, client_address):
     """Handle the client connection for incoming models."""
     global received_models, received_accuracies
@@ -245,6 +246,7 @@ def handle_client_connection(client_socket, client_address):
     finally:
         client_socket.close()
 
+################### Kafka Related Functions ###################
 def consume_kafka_messages(topic_names):
     """Consume messages from Kafka topics."""
     print("Starting Kafka consumer...")
@@ -271,9 +273,10 @@ def consume_kafka_messages(topic_names):
         print(error_msg)
 
         
-# Main Server Functions
+################### Main Function ###################
 if __name__ == "__main__":
 
+    ################### Threads ###################
     def kafka_consumer_thread():
             """Start Kafka Consumer."""
             consume_kafka_messages(TOPIC_NAMES)

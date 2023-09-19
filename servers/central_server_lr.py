@@ -26,13 +26,14 @@ EXPECTED_COLUMNS = 18
 filename = "central_server_data.csv"
 is_model_aggregated = False
 
+################### CSV Related Functions ###################
 def write_data_to_csv(writer, data, columns):
+    """Write data to CSV."""
     try:
         writer.writerow([data[col] for col in columns])
     except Exception as e:
         logging.error(f"Error writing data to CSV: {e}")
 
-# Utility Functions
 def save_data_to_csv(data):
     """Save provided data to CSV."""
     columns = [
@@ -56,6 +57,20 @@ def save_data_to_csv(data):
     
     logging.info("Data written to CSV successfully.")
 
+def load_csv_data(filename, num_features=8):
+    """Load data from CSV and return features and labels."""
+    data = np.genfromtxt(filename, delimiter=',', skip_header=1)
+
+    # Check if data is one-dimensional
+    if len(data.shape) == 1:
+        data = data.reshape(1, -1)  # Reshape to 2D
+
+    X = data[:, :num_features]
+    y = data[:, num_features]
+
+    return X, y
+
+################### Socket Related Functions ###################
 def send_large_data(sock, data):
     """Send large data over a socket."""
     data_size = len(data)
@@ -80,7 +95,7 @@ def send_global_model_to_node(client_socket, client_address):
         logger.info("Global model not aggregated yet. Waiting...")
         return
     with tempfile.NamedTemporaryFile(delete=True, suffix=".pkl") as tmp:
-        with global_model_lock:  # Locking while accessing global_model
+        with global_model_lock:
             joblib.dump(global_model, tmp.name)
             serialized_model = tmp.read()
             logger.info("Size of serialized model being sent: %s bytes", len(serialized_model))
@@ -104,9 +119,9 @@ def send_global_model_to_node(client_socket, client_address):
         finally:
             client_socket.close()
 
+################### Data Processing Function ###################
 def process_data(row):
     """Process data and return feature set and label."""
-    # Mapping indices to the columns from the CSV
     data = {
         "charge": row[5],
         "distance_to_charging_point": row[12],
@@ -137,20 +152,8 @@ def process_data(row):
     label = data['needs_charge']
     return features, label
 
-def load_csv_data(filename, num_features=8):
-    """Load data from CSV and return features and labels."""
-    data = np.genfromtxt(filename, delimiter=',', skip_header=1)
 
-    # Check if data is one-dimensional
-    if len(data.shape) == 1:
-        data = data.reshape(1, -1)  # Reshape to 2D
-
-    X = data[:, :num_features]
-    y = data[:, num_features]
-
-    return X, y
-
-# Model Related Functions
+################### Model Related Function ###################
 def create_blank_model():
     """Create and return a blank linear regression model."""
     model = LinearRegression()
@@ -167,16 +170,13 @@ def train_global_model():
     """Train the global model."""
     logging.info("Training the global model function is called...")
 
-    # Load raw data
     raw_data = np.genfromtxt("central_server_data.csv", delimiter=',', skip_header=1)
 
-    # Process data
     processed_data = [process_data(row) for row in raw_data]
     X = np.array([item[0] for item in processed_data])
     y = np.array([item[1] for item in processed_data])
 
     with global_model_lock:
-        # Log the start of training
         logger.info("Starting training of the global model...")
         
         global_model.fit(X, y)
@@ -185,7 +185,6 @@ def train_global_model():
         
         logger.info("Test accuracy: %s", accuracy)
 
-        # Log the completion of training
         logger.info("Training of the global model completed.")
 
 def aggregate_models_federated_averaging(models, accuracies):
@@ -212,7 +211,7 @@ def aggregate_models_federated_averaging(models, accuracies):
         logging.info("Aggregation complete.")
         is_model_aggregated = True
 
-# Kafka and Networking Functions
+################### Server Related Functions ###################
 def handle_client_connection(client_socket, client_address):
     """Handle the client connection for incoming models."""
     global received_models, received_accuracies, is_model_aggregated, all_models_received
@@ -258,6 +257,7 @@ def handle_client_connection(client_socket, client_address):
     finally:
         client_socket.close()
 
+################### Kafka Related Functions ###################
 def consume_kafka_messages(topic_names):
     """Consume messages from Kafka topics."""
     logging.info("Consuming Kafka messages...")
@@ -282,9 +282,8 @@ def consume_kafka_messages(topic_names):
         if msg:
             error_msg += f", Last processed message topic: {msg.topic}"
         logging.error(error_msg)
-
-        
-# Main Server Functions
+     
+################### Main Function ###################
 if __name__ == "__main__":
 
     def kafka_consumer_thread():
