@@ -40,16 +40,16 @@ total_predictions = 0
 correct_predictions = 0
 training_batch = []
 accumulated_records = []
-linear_reg_model = joblib.load('/home/maith/Desktop/practical1/models/linearReg_model_node3.pkl')
+linear_reg_model = joblib.load('/home/maith/Desktop/p1/models/linearReg_model_node3.pkl')
 
 # Load scaler for feature normalization
-scaler = joblib.load('/home/maith/Desktop/practical1/models/linearReg_scaler_node3.pkl')
+scaler = joblib.load('/home/maith/Desktop/p1/models/linearReg_scaler_node3.pkl')
 model_lock = threading.Lock()
 prediction_lock = threading.Lock()
 accuracy_list = []
 
-# Function to plot prediction accuracy over time
 def plot_accuracy():
+    """ Plot the prediction accuracy over time."""
     global total_predictions
     global correct_predictions
     global accuracy_list
@@ -67,16 +67,15 @@ def plot_accuracy():
     plt.title('Prediction Accuracy Over Time')
     plt.pause(0.01)
 
-# Function to write data to CSV file
 def write_data_to_csv(writer, data, columns):
+    """ Write a single row of data to the CSV file."""
     try:
         writer.writerow([data[col] for col in columns])
     except Exception as e:
         logging.error(f"Failed to write data to CSV: {e}")
 
-# Function to preprocess incoming data
 def process_data(data):
-
+    """ Process a single row of data."""
     try:
         data['needs_charge'] = 1 if float(data['charge']) <= 50 else 0
         features = [
@@ -103,9 +102,10 @@ def process_data(data):
 
     except Exception as e:
         logging.error(f"Error processing data: {e}")
-        return ([], 0)  # Default return
+        return ([], 0)
 
 def preprocess_data(data_list):
+    """ Preprocess a list of data."""
     features_list, labels_list = [], []
     for data in data_list:
         features, label = process_data(data)
@@ -114,11 +114,11 @@ def preprocess_data(data_list):
     
     return np.array(features_list), np.array(labels_list)
     
-# Function to retrain the model with new batch of data
 def retrain_model(preprocessed_data_batch):
+    """ Retrain the model with the data accumulated in training_batch."""
     global linear_reg_model
 
-    # As the data is already preprocessed, just unpack it
+    # Unpack the data
     X, y = preprocessed_data_batch
     
     try:
@@ -129,6 +129,7 @@ def retrain_model(preprocessed_data_batch):
         logging.error(f"Failed to retrain model: {e}")
 
 def periodic_retraining():
+    """ Periodically retrain the model with the data accumulated in training_batch."""
     global training_batch
     while True:
         time.sleep(RETRAIN_INTERVAL)
@@ -142,25 +143,34 @@ def periodic_retraining():
                 logging.info("No new data for retraining. Skipping this cycle.")
 
 def preprocess_single_row(data_row):
-    """Process a single row and return its features and label."""
-    data_row['needs_charge'] = 1 if float(data_row['charge']) <= 50 else 0
-    features = [
-        float(data_row["current_speed"]),
-        float(data_row["battery_capacity"]),
-        float(data_row["charge"]),
-        float(data_row["consumption"]),
-        float(data_row["distance_covered"]),
-        float(data_row["battery_life"]),
-        float(data_row["distance_to_charging_point"]),
-        float(data_row["emergency_duration"])
-    ]
-    # Replace infinity values with NaN
-    if np.isinf(features[6]):
-        features[6] = np.nan
-    # Replace NaN values with mean values
-    features = np.nan_to_num(features, nan=np.nanmean(features))
-    label = data_row['needs_charge']
-    return features, label
+    """ Preprocess a single row of data."""
+    try:
+        data_row['needs_charge'] = 1 if float(data_row['charge']) <= 50 else 0
+        features = [
+            float(data_row["current_speed"]),
+            float(data_row["battery_capacity"]),
+            float(data_row["charge"]),
+            float(data_row["consumption"]),
+            float(data_row["distance_covered"]),
+            float(data_row["battery_life"]),
+            float(data_row["distance_to_charging_point"]),
+            float(data_row["emergency_duration"])
+        ]
+
+        # Replace infinity values with NaN
+        if np.isinf(features[6]):
+            features[6] = np.nan
+
+        # Replace NaN values with mean values
+        features = np.nan_to_num(features, nan=np.nanmean(features))
+        label = data_row['needs_charge']
+
+        logging.info(f"process_data is returning features with length: {len(features)} and label: {label}")
+        return features, label
+
+    except Exception as e:
+        logging.error(f"Error processing data: {e}")
+        return ([], 0)
 
 def load_and_preprocess_data():
     """ Load the last 15000 records from the CSV file and preprocess them. """
@@ -179,8 +189,8 @@ def load_and_preprocess_data():
     
     return X, y
 
-# Function to predict if charging is needed
 def predict_need_charge(model, scaler, features):
+    """ Predict whether the car needs to be charged or not."""
     try:
         feature_names = [
             "current_speed", "battery_capacity", "charge", "consumption",
@@ -196,8 +206,8 @@ def predict_need_charge(model, scaler, features):
         logging.error(f"Prediction error: {e}")
         return None
     
-# Function to predict and update the model
 def predict_and_update(data):
+    """ Predict whether the car needs to be charged or not and update the model."""
     global total_predictions
     global correct_predictions
     global training_batch
@@ -252,15 +262,14 @@ def predict_and_update(data):
     except Exception as e:
         logging.error(f"Error in prediction and update process: {e}\n{traceback.format_exc()}")
 
-
-# Function to send large data over a socket
 def send_large_data(sock, data):
+    """ Send large data over a socket."""
     data_size = len(data)
     sock.sendall(struct.pack("!I", data_size))
     sock.sendall(data)
 
-# Function to receive large data from a socket
 def receive_large_data(sock):
+    """ Receive large data over a socket."""
     data_size = struct.unpack("!I", sock.recv(4))[0]
     chunks = []
     bytes_received = 0
@@ -272,18 +281,17 @@ def receive_large_data(sock):
         bytes_received += len(chunk)
     return b''.join(chunks)
 
-# calculate accuracy
+# calculate accuracy of the model on the node
 node_accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
 logging.info(f"Node accuracy: {node_accuracy}")
 
-# Function to exchange model with server
 def exchange_model_with_server(local_model):
+    """ Exchange the local model with the server."""
     MAX_RETRIES = 3
-    RETRY_WAIT = 5  # Wait time before retrying (this will be increased exponentially)
+    RETRY_WAIT = 5
     
     logging.info("Starting model exchange with the server.")
-    
-    # Step 0: Serialize the model
+
     with tempfile.NamedTemporaryFile(delete=True, suffix='.pkl') as tmp:
         joblib.dump(local_model, tmp.name)
         with open(tmp.name, 'rb') as f:
@@ -335,7 +343,6 @@ def exchange_model_with_server(local_model):
                     updated_model = joblib.load(tmp_file.name)
 
                 logging.info("Received global model.")
-                # Additional logging about the model can be added if needed
 
                 return updated_model
 
@@ -352,15 +359,14 @@ def exchange_model_with_server(local_model):
     logging.error("Failed to exchange model with server after maximum retries.")
     return None
 
-# Function to print model accuracy
 def print_model_accuracy():
+    """ Print the model accuracy on the node."""
     with prediction_lock:
         node_accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
         logging.info(f"Node accuracy: {node_accuracy:.2f}%")
 
-
-# Function for periodic model exchange with the server
 def periodic_model_exchange():
+    """ Periodically exchange the local model with the server."""
     global linear_reg_model, correct_predictions, total_predictions, TIME_INTERVAL
     while True:
         time.sleep(TIME_INTERVAL)  
@@ -371,20 +377,19 @@ def periodic_model_exchange():
             if updated_model is None:
                 logging.error("Failed to exchange model with server. Skipping this cycle.")
             else:
-                # Sleep for 1 minute before applying the updated model
+                # Sleep for before applying the updated model
                 time.sleep(5)
                 with model_lock:
                     linear_reg_model = updated_model
 
-                # Reset prediction counters after model exchange
                 correct_predictions = 0
                 total_predictions = 0
             print_model_accuracy()  # After exchanging models
         except Exception as e:
             logging.error(f"Error during model exchange: {e}")
 
-# Function to send accumulated data to the central server via Kafka
 def send_accumulated_data_to_server():
+    """ Send the accumulated data to the central server."""
     global accumulated_records
     try:
         if accumulated_records:
@@ -397,6 +402,7 @@ def send_accumulated_data_to_server():
         logging.error(f"Failed to send data to the central server via Kafka: {e}")
 
 def consume_kafka_messages_and_send_to_server(topic_name):
+    """ Consume messages from a Kafka topic and send them to the central server."""
     try:
         consumer = KafkaConsumer(
             topic_name,
@@ -418,16 +424,16 @@ def consume_kafka_messages_and_send_to_server(topic_name):
     except Exception as e:
         logging.error(f"Kafka consumption error: {e}")
 
-# Function to send data to the central server
 def send_data_to_server(data):
+    """ Send data to the central server."""
     global accumulated_records
     accumulated_records.append(data)
 
     if len(accumulated_records) >= BATCH_SIZE:
         send_accumulated_data_to_server()
 
-# Function to consume messages from a Kafka topic
 def consume_kafka_messages(topic_name):
+    """ Consume messages from a Kafka topic."""
     logging.info("Starting Kafka consumer...")
     try:
         consumer = KafkaConsumer(
@@ -445,7 +451,6 @@ def consume_kafka_messages(topic_name):
     except Exception as e:
         logging.error(f"Kafka consumption error: {e}")
 
-# Main execution
 # Main execution
 if __name__ == "__main__":
     data_send_thread = threading.Thread(target=consume_kafka_messages_and_send_to_server, args=('node3_data',))
