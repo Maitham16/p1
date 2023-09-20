@@ -26,20 +26,20 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 total_predictions = 0
 correct_predictions = 0
 training_batch = []
-nn_model = tf.keras.models.load_model('/home/maith/Desktop/practical1/neural_network_model_node_3.h5')
+nn_model = tf.keras.models.load_model('/home/maith/Desktop/p1/models/neural_network_model_node_3.h5')
 
-# Check if the model is compiled, and if not, compile it
+# Check if the model is compiled
 if not nn_model.optimizer:
     nn_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
 # Load scaler for feature normalization
-scaler = joblib.load('/home/maith/Desktop/practical1/scaler_node_3.pkl')
+scaler = joblib.load('/home/maith/Desktop/p1/models/scaler_node_3.pkl')
 model_lock = threading.Lock()
 prediction_lock = threading.Lock()
 accuracy_list = []
 
-# Function to plot prediction accuracy over time
 def plot_accuracy():
+    """Plot prediction accuracy over time."""
     global total_predictions
     global correct_predictions
     global accuracy_list
@@ -57,15 +57,15 @@ def plot_accuracy():
     plt.title('Prediction Accuracy Over Time')
     plt.pause(0.01)
 
-# Function to write data to CSV file
 def write_data_to_csv(writer, data, columns):
+    """Write data to CSV file."""
     try:
         writer.writerow([data[col] for col in columns])
     except Exception as e:
         print(f"Failed to write data to CSV: {e}")
 
-# Function to preprocess incoming data
 def process_data(data):
+    """Process data and return features and label."""
     data['needs_charge'] = 1 if float(data['charge']) <= 50 else 0
     features = [
         float(data["current_speed"]),
@@ -82,10 +82,9 @@ def process_data(data):
     label = data['needs_charge']
     return features, label
 
-# Function to predict if charging is needed
 def predict_need_charge(model, scaler, features):
+    """Predict whether the car needs to be charged."""
     try:
-        # Ensure that 'features' is a DataFrame with proper feature names
         feature_names = [
             "current_speed", "battery_capacity", "charge", "consumption",
             "distance_covered", "battery_life", "distance_to_charging_point", 
@@ -96,20 +95,21 @@ def predict_need_charge(model, scaler, features):
         features_scaled = scaler.transform(df)
         prediction = model.predict(features_scaled)
         return int(prediction.round())
+    
     except Exception as e:
         print(f"Prediction error: {e}")
         return None
 
-# Function to retrain the model with new batch of data
 def retrain_model(batch):
+    """Retrain the model on the given batch."""
     global nn_model
     X_train = [item[0] for item in batch]
     y_train = [item[1] for item in batch]
     with model_lock:
         nn_model.train_on_batch(X_train, y_train)
 
-# Function to predict and update the model
 def predict_and_update(data):
+    """Predict whether the car needs to be charged and update the model."""
     global total_predictions
     global correct_predictions
     global training_batch
@@ -152,14 +152,14 @@ def predict_and_update(data):
     except Exception as e:
         print(f"Error in prediction and update process: {e}")
 
-# Function to send large data over a socket
 def send_large_data(sock, data):
+    """Send large data over a socket."""
     data_size = len(data)
     sock.sendall(struct.pack("!I", data_size))
     sock.sendall(data)
 
-# Function to receive large data from a socket
 def receive_large_data(sock):
+    """Receive large data over a socket."""
     data_size = struct.unpack("!I", sock.recv(4))[0]
     chunks = []
     bytes_received = 0
@@ -175,14 +175,14 @@ def receive_large_data(sock):
 node_accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
 print(f"Node accuracy: {node_accuracy}")
 
-# Function to exchange model with server
 def exchange_model_with_server(local_model):
+    """Exchange the local model with the server."""
     MAX_RETRIES = 3
-    RETRY_WAIT = 5  # Wait time before retrying (this will be increased exponentially)
+    RETRY_WAIT = 5
     
     logging.info("Starting model exchange with the server.")
     
-    # Step 0: Serialize the model
+    # Serialize the model
     with tempfile.NamedTemporaryFile(delete=True) as tmp:
         local_model.save(tmp.name, save_format="h5")
         serialized_model = tmp.read()
@@ -195,7 +195,7 @@ def exchange_model_with_server(local_model):
 
             # Step 1: Node sends its model to the server
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(10)  # Setting a 10-second timeout for socket operations
+                s.settimeout(10)
                 logging.info(f"Attempting to connect to the server at {SERVER_HOST}:{SERVER_PORT}")
                 s.connect((SERVER_HOST, SERVER_PORT))
                 logging.info(f"Successfully connected to the server at {SERVER_HOST}:{SERVER_PORT}")
@@ -254,37 +254,35 @@ def exchange_model_with_server(local_model):
     logging.error("Failed to exchange model with server after maximum retries.")
     return None
 
-# Function to print model accuracy
 def print_model_accuracy():
+    """Print the model accuracy."""
     with prediction_lock:
         node_accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
         print(f"Node accuracy: {node_accuracy:.2f}%")
 
-# Function for periodic model exchange with the server
 def periodic_model_exchange():
+    """Periodically exchange the local model with the server."""
     global nn_model, correct_predictions, total_predictions
     while True:
-        time.sleep(60)  # Wait for a specified time interval (1 minute)
+        time.sleep(60)
         try:
-            print_model_accuracy()  # Before exchanging models
+            print_model_accuracy() # Before exchanging models
             updated_model = exchange_model_with_server(nn_model)
             if updated_model is None:
                 print("Model is None.")
             else:
-                # Sleep for 1 minute before applying the updated model
                 time.sleep(5)
                 with model_lock:
                     nn_model = updated_model
 
-                # Reset prediction counters after model exchange
                 correct_predictions = 0
                 total_predictions = 0
             print_model_accuracy()  # After exchanging models
         except Exception as e:
             print(f"Error during model exchange: {e}")
 
-# Function to consume messages from a Kafka topic
 def consume_kafka_messages(topic_name):
+    """Consume messages from the given Kafka topic."""
     print("Starting Kafka consumer...")
     try:
         consumer = KafkaConsumer(
