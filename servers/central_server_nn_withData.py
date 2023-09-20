@@ -26,6 +26,7 @@ TOPIC_NAMES = ['node1_server_data', 'node2_server_data', 'node3_server_data', 'n
 NUM_NODES = 4
 EXPECTED_COLUMNS = 18
 filename = "central_server_data.csv"
+is_model_aggregated = False
 
 ########### Callbacks class for neural network training ###########
 class LoggingCallback(Callback):
@@ -40,7 +41,7 @@ def write_data_to_csv(writer, data, columns):
     try:
         writer.writerow([data[col] for col in columns])
     except Exception as e:
-        print(f"Failed to write data to CSV: {e}")
+        logging.error(f"Failed to write to CSV: {e}")
 
 def save_data_to_csv(data):
     """Save provided data to CSV."""
@@ -60,10 +61,10 @@ def save_data_to_csv(data):
                 writer.writerow(columns)
             write_data_to_csv(writer, data, columns)
     except Exception as e:
-        print(f"Failed to write to CSV: {e}")
+        logging.error(f"Failed to save data to CSV: {e}")
         return
     
-    print(f"Saved data to CSV: {data}")
+    logging.info(f"Saved data to CSV: {data}")
 
 def load_csv_data(filename, num_features=8):
     """Load data from CSV and return features and labels."""
@@ -99,17 +100,36 @@ def receive_large_data(sock):
 
 def send_global_model_to_node(client_socket, client_address):
     """Send the global model to a node."""
+    global is_model_aggregated
+    if not is_model_aggregated:
+        logger.info("Global model not aggregated yet. Waiting...")
+        return
+    
     with tempfile.NamedTemporaryFile(delete=True) as tmp:
         with global_model_lock:
             global_model.save(tmp.name, save_format="h5")
+            tmp.flush()
             serialized_model = tmp.read()
+            logger.info("Size of serialized model being sent: %s bytes", len(serialized_model))
 
         logger.info("Sending global model to node (%s)", client_address[0])
         try:
             send_large_data(client_socket, serialized_model)
+            
+            # Waiting for an acknowledgment from the client
+            acknowledgment = client_socket.recv(1024).decode()
+            if acknowledgment == "ACK":
+                logger.info("Node (%s) acknowledged receipt of the global model.", client_address[0])
+            else:
+                logger.warning("Unexpected acknowledgment from node (%s): %s", client_address[0], acknowledgment)
+                
         except BrokenPipeError:
-            print("Client disconnected before data could be sent.")
-        client_socket.close()
+            logger.error("Broken pipe error while sending global model to node (%s)", client_address[0])
+        except Exception as e:
+            logger.error(f"Failed to receive acknowledgment from node ({client_address[0]}): {e}")
+            
+        finally:
+            client_socket.close()
 
 ################### Data Processing Functions ###################
 def process_data(row):
@@ -162,7 +182,7 @@ received_accuracies = []
 
 def train_global_model():
     """Train the global model."""
-    print("train_global_model function is called!") 
+    logging.info("train_global_model function is called!") 
 
     raw_data = np.genfromtxt("central_server_data.csv", delimiter=',', skip_header=1)
 
@@ -173,20 +193,22 @@ def train_global_model():
     with global_model_lock:
         global_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
-        logger.info("Starting training of the global model...")
+        logging.info("Starting training of the global model...")
         
         global_model.fit(X, y, epochs=100, batch_size=32, verbose=1,
                          callbacks=[LoggingCallback()])
         
         score = global_model.evaluate(X, y, verbose=1)
         
-        logger.info("Test loss: %s", score[0])
-        logger.info("Test accuracy: %s", score[1])
+        logging.info("Test loss: %s", score[0])
+        logging.info("Test accuracy: %s", score[1])
 
-        logger.info("Training of the global model completed.")
+        logging.info("Training of the global model completed.")
 
 def aggregate_models_federated_averaging(models, accuracies):
     """Aggregate models using Federated Averaging."""
+    global is_model_aggregated, global_model
+    logging.info("Aggregating models using Federated Averaging...")
     # Calculate the weights for each model
     weights = [accuracy / sum(accuracies) for accuracy in accuracies]
 
@@ -202,21 +224,25 @@ def aggregate_models_federated_averaging(models, accuracies):
         global_model.set_weights(averaged_weights)
     global_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
+    logging.info("Aggregation complete.")
+    is_model_aggregated = True
+
 ################### Server Related Functions ###################
 def handle_client_connection(client_socket, client_address):
     """Handle the client connection for incoming models."""
-    global received_models, received_accuracies
+    global received_models, received_accuracies, is_model_aggregated, all_models_received
     
-    print(f"Handling connection from client {client_address[0]}")
+    logging.info("Handling client connection from %s:%s", client_address[0], client_address[1])
 
     try:
         # Receiving the accuracy and model
-        accuracy = float(client_socket.recv(1024).decode())
+        accuracy = float(client_socket.recv(1024).decode('utf-8'))
         logger.info("Received accuracy: %s from client %s", accuracy, client_address[0])
         data = receive_large_data(client_socket)
 
         with tempfile.NamedTemporaryFile(delete=True) as tmp_file:
             tmp_file.write(data)
+            tmp_file.flush()
             local_model = tf.keras.models.load_model(tmp_file.name, compile=False)
 
             with received_models_lock: 
@@ -231,17 +257,18 @@ def handle_client_connection(client_socket, client_address):
                 aggregate_models_federated_averaging(received_models, received_accuracies)
                 received_models = []
                 received_accuracies = []
+                is_model_aggregated = True
                 logger.info("Aggregation complete.")
 
             # Training the aggregated global model
             train_global_model()
 
-        print("About to send READY confirmation to client")
+        logging.info("Sending READY confirmation to client %s", client_address[0])
         client_socket.send("READY".encode())
         logger.info("Sent READY confirmation to client")
 
     except Exception as e:
-        logger.error(f"Error handling client {client_address[0]}: {e}")
+        logger.error(f"Error handling client {client_address[0]}: {e}", exc_info=True)
 
     finally:
         client_socket.close()
@@ -249,7 +276,7 @@ def handle_client_connection(client_socket, client_address):
 ################### Kafka Related Functions ###################
 def consume_kafka_messages(topic_names):
     """Consume messages from Kafka topics."""
-    print("Starting Kafka consumer...")
+    logging.info("Starting Kafka consumer...")
     msg = None
     try:
         consumer = KafkaConsumer(
@@ -263,14 +290,14 @@ def consume_kafka_messages(topic_names):
 
         for _, msg in enumerate(consumer):
             data = msg.value
-            print(f"Processed Kafka message from topic {msg.topic}: {data}")
+            logging.info(f"Processed Kafka message from topic {msg.topic}: {data}")
             save_data_to_csv(data)
 
     except Exception as e:
         error_msg = f"Kafka consumption error: {e}"
         if msg:
             error_msg += f", Last processed message topic: {msg.topic}"
-        print(error_msg)
+        logging.error(error_msg)
 
         
 ################### Main Function ###################
@@ -286,11 +313,11 @@ if __name__ == "__main__":
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind((SERVER_HOST, SERVER_PORT))
             s.listen()
-            logger.info("Server listening for incoming models on %s:%s", SERVER_HOST, SERVER_PORT)
+            logging.info("Server listening for incoming models on %s:%s", SERVER_HOST, SERVER_PORT)
 
             while True:
                 client_socket, client_address = s.accept()
-                logger.info("Accepted connection from %s:%s", client_address[0], client_address[1])
+                logging.info("Accepted connection from %s:%s", client_address[0], client_address[1])
                 threading.Thread(target=handle_client_connection, args=(client_socket, client_address)).start()
 
     def send_thread():
@@ -298,7 +325,7 @@ if __name__ == "__main__":
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as send_socket:
             send_socket.bind((SERVER_HOST, SERVER_SEND_PORT))
             send_socket.listen()
-            logger.info("Server ready to send global models on %s:%s", SERVER_HOST, SERVER_SEND_PORT)
+            logging.info("Server ready to send global models on %s:%s", SERVER_HOST, SERVER_SEND_PORT)
 
             while True:
                 client_socket, client_address = send_socket.accept()

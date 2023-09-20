@@ -117,6 +117,7 @@ def handle_client_connection(client_socket, client_address):
         with tempfile.NamedTemporaryFile(delete=True) as tmp:
             with global_model_lock:
                 global_model.save(tmp.name, save_format="h5")
+                tmp.flush()
             serialized_model = tmp.read()
             
             logger.info("Sending aggregated global model to node")
