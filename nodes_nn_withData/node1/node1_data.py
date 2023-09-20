@@ -225,7 +225,7 @@ def exchange_model_with_server(local_model):
 
             # Step 3: Connect back to the server to receive the updated global model
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(10)
+                s.settimeout(30)
                 logging.info(f"Attempting to connect to the server at {SERVER_HOST}:{SERVER_SEND_PORT} for receiving the model.")
                 s.connect((SERVER_HOST, SERVER_SEND_PORT))
                 logging.info("Connected successfully.")
@@ -238,6 +238,7 @@ def exchange_model_with_server(local_model):
 
                 with tempfile.NamedTemporaryFile(delete=True) as tmp_file:
                     tmp_file.write(data)
+                    tmp_file.flush()
                     updated_model = tf.keras.models.load_model(tmp_file.name, compile=False)
 
                 updated_model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
