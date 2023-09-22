@@ -6,3 +6,4 @@
 #   - central_server_lr: 		        receives from nodes linear regression models, accuracies, and data. Then aggregate them, 
                                         and after that sending back the global model to nodes. 
                                         (train the global model is paused currently)
+                                        
